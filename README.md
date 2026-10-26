@@ -147,7 +147,9 @@ Modèle par défaut : `gemini-3.5-flash` (point de terminaison `global`), puisqu
 
 Chaque décision de l'analyste (à traiter, en cours, classé sans suite, escaladé) est ajoutée au journal, jamais modifiée : date, analyste, justification, score du moment et utilisation ou non de la note IA. Le statut d'un dossier est sa dernière décision. Un classement ou une escalade sans justification est refusé. Le journal s'exporte en CSV depuis la barre latérale.
 
-Stockage : table BigQuery `lcbft_features.decisions` (partitionnée par date, clusterisée par dossier) avec `JOURNAL=bigquery`, fichier `data/decisions/decisions.csv` sinon.
+Les notes générées par l'agent sont archivées de la même façon : texte de la note, modèle, sources citées, résultat des contrôles, nombre de rédactions et tokens consommés. En rouvrant un dossier, la dernière note s'affiche sans rappeler Gemini.
+
+Stockage, avec `JOURNAL=bigquery` (réglage du déploiement) : tables `lcbft_features.decisions` et `lcbft_features.notes_ia`, partitionnées par date et clusterisées par dossier. Sinon (poste local) : `data/decisions/decisions.csv` et `data/decisions/notes_ia.jsonl`.
 
 ## Déploiement sur Cloud Run
 

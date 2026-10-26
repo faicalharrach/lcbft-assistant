@@ -28,6 +28,7 @@ from src.app.donnees import (  # noqa: E402
     libelle_variable, transactions_client,
 )
 from src.agent.graphe import MODELE_PAR_DEFAUT, generer_note  # noqa: E402
+from src.agent.rag import charger_corpus  # noqa: E402
 from src.app import journal, theme  # noqa: E402
 from src.app.geo import NOMS_RISQUE, carte_alertes, carte_client  # noqa: E402
 from src.detection.evaluate import SCORES  # noqa: E402
@@ -333,6 +334,26 @@ def note_pour_affichage(note: str, documents: list) -> str:
     return re.sub(r"^##\s+", "##### ", texte, flags=re.MULTILINE)
 
 
+def _note_sauvegardee(dossier: str):
+    """Dernière note archivée du dossier, remise au format d'affichage (ou None)."""
+    try:
+        archive = journal.derniere_note(dossier)
+    except Exception:  # noqa: BLE001 — sans archive accessible, on propose simplement de générer
+        return None
+    if not archive:
+        return None
+    par_id = {d.id: d for d in charger_corpus()}
+    return {
+        "note": archive["note"],
+        "documents": [par_id[i] for i in archive["sources"] if i in par_id],
+        "problemes": list(archive["problemes"] or []),
+        "tentatives": archive["tentatives"],
+        "brouillons": [],
+        "horodatage": archive["horodatage"],
+        "modele": archive["modele"],
+    }
+
+
 def section_note(dossier: str, client: pd.Series, tx: pd.DataFrame) -> None:
     """Note rédigée par l'agent (LangGraph + RAG + Gemini), avec ses sources et ses contrôles."""
     notes = st.session_state.setdefault("notes", {})
@@ -343,6 +364,11 @@ def section_note(dossier: str, client: pd.Series, tx: pd.DataFrame) -> None:
     with gauche:
         st.caption(f"Rédigée par l'agent à partir des faits du dossier et de la base réglementaire · modèle : {modele}. "
                    "La note aide l'analyste ; la décision lui appartient.")
+    if dossier not in notes:
+        sauvegardee = _note_sauvegardee(dossier)
+        if sauvegardee:
+            notes[dossier] = sauvegardee
+
     with droite:
         libelle = "Régénérer la note" if dossier in notes else "Générer la note d'analyse"
         lancer = st.button(libelle, icon=":material/auto_awesome:", type="primary", width="stretch")
@@ -352,11 +378,16 @@ def section_note(dossier: str, client: pd.Series, tx: pd.DataFrame) -> None:
             try:
                 donnees_client = client.to_dict() | {"numero_dossier": dossier}
                 notes[dossier] = generer_note(donnees_client, tx)
+                notes[dossier]["horodatage"] = None  # note de la session en cours
             except Exception as erreur:  # noqa: BLE001 — on affiche l'erreur à l'analyste
                 st.error(f"La génération a échoué : {erreur}")
                 st.caption("Vérifiez `gcloud auth application-default login` et l'API Vertex AI, "
                            "ou lancez l'application avec `AGENT_LLM=simule RAG_MOTEUR=local` pour le mode hors ligne.")
                 return
+            try:
+                journal.enregistrer_note(dossier, modele, notes[dossier])
+            except Exception as erreur:  # noqa: BLE001 — la note reste affichée même si l'archivage échoue
+                st.warning(f"La note n'a pas pu être archivée : {erreur}")
 
     resultat = notes.get(dossier)
     if resultat is None:
@@ -365,6 +396,11 @@ def section_note(dossier: str, client: pd.Series, tx: pd.DataFrame) -> None:
                     '(sources, montants, articles cités, confidentialité).</div>', unsafe_allow_html=True)
         return
 
+    if resultat.get("horodatage") is not None:
+        date = pd.Timestamp(resultat["horodatage"]).tz_convert("Europe/Paris") \
+            if pd.Timestamp(resultat["horodatage"]).tzinfo else pd.Timestamp(resultat["horodatage"])
+        st.caption(f":material/history: Note archivée du {date:%d/%m/%Y à %H:%M}, générée par {resultat.get('modele')}. "
+                   "Cliquez sur « Régénérer la note » pour une nouvelle version.")
     with st.container(border=True):
         st.markdown(note_pour_affichage(resultat["note"], resultat["documents"]), unsafe_allow_html=True)
     if resultat["problemes"]:

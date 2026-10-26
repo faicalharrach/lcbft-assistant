@@ -26,3 +26,19 @@ def test_decisions_ajoutees_jamais_ecrasees():
     assert len(journal.historique("D000001")) == 2
     assert journal.statuts() == {"D000001": "Classé sans suite", "D000002": "Escaladé (déclaration de soupçon)"}
     assert journal.historique("D000002")["analyste"].iloc[0] == "analyste"
+
+
+def test_note_archivee_puis_relue(tmp_path, monkeypatch):
+    monkeypatch.setattr(journal, "CHEMIN_NOTES", tmp_path / "notes.jsonl")
+    journal.derniere_note.clear()
+    doc = type("Doc", (), {"id": "reg_examen_renforce"})()
+    resultat = {"note": "## Synthèse\nV1", "documents": [doc], "problemes": [], "tentatives": 1,
+                "brouillons": [{"usage": {"input_tokens": 6000, "output_tokens": 2500}}]}
+    journal.enregistrer_note("D000001", "gemini-3.5-flash", resultat)
+    journal.enregistrer_note("D000001", "gemini-3.5-flash", resultat | {"note": "## Synthèse\nV2"})
+
+    note = journal.derniere_note("D000001")
+    assert note["note"].endswith("V2")
+    assert note["sources"] == ["reg_examen_renforce"]
+    assert note["tokens_entree"] == 6000
+    assert journal.derniere_note("D999999") is None
