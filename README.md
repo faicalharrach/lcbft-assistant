@@ -34,7 +34,7 @@ Le projet suit six étapes.
 2. Détection : un Isolation Forest repère les profils atypiques et des règles métier encodent les typologies connues. Le score final combine les deux à parts égales. SHAP explique la contribution de chaque variable.
 3. Évaluation : comme les typologies sont injectées, on connaît la vérité terrain. On mesure la précision sur les 100 premières alertes et le rappel par typologie.
 4. Agent IA : un graphe LangGraph qui calcule les faits du dossier, retrouve les fiches réglementaires et typologiques pertinentes (RAG), fait rédiger la note par Gemini sur Vertex AI, puis la contrôle avant de l'afficher.
-5. Interface : une application Streamlit avec la file d'alertes, une fiche client (score, explications SHAP, transactions) et la note générée.
+5. Interface : une application Streamlit avec la file d'alertes, une fiche client (score, explications SHAP, carte des flux, transactions, note générée) et un journal des décisions de l'analyste.
 6. Déploiement : conteneur Docker sur Cloud Run, données sur BigQuery.
 
 ## Modèle de données
@@ -73,6 +73,7 @@ lcbft-assistant/
 │   ├── detection/     Isolation Forest, règles, score
 │   ├── agent/         RAG et LangGraph
 │   └── app/           interface Streamlit
+├── deploy/            script de déploiement Cloud Run
 ├── notebooks/
 └── tests/
 ```
@@ -108,7 +109,7 @@ Le SQL de `sql/` est écrit pour BigQuery. Les tests le traduisent vers DuckDB a
 - [x] Évaluation
 - [x] Agent IA (note d'analyse : LangGraph, RAG, Gemini, garde-fous)
 - [x] Interface Streamlit (file d'alertes, fiche client, performance)
-- [ ] Déploiement Cloud Run
+- [x] Journal des décisions (BigQuery) et déploiement Cloud Run
 
 ## Résultats
 
@@ -141,6 +142,22 @@ collecter -> qualifier -> rechercher -> rediger -> verifier --(contrôles OK)-->
 - La note aide l'analyste, elle ne décide pas. L'orientation proposée reste une proposition.
 
 Modèle par défaut : `gemini-3.5-flash` (point de terminaison `global`), puisque `gemini-2.5-flash` a été retiré de Vertex AI le 20 octobre 2026. Modèle et région se changent avec `GEMINI_MODEL` et `VERTEX_LOCATION`. Pour une banque, il faudrait fixer une région européenne pour la résidence des données.
+
+## Journal des décisions
+
+Chaque décision de l'analyste (à traiter, en cours, classé sans suite, escaladé) est ajoutée au journal, jamais modifiée : date, analyste, justification, score du moment et utilisation ou non de la note IA. Le statut d'un dossier est sa dernière décision. Un classement ou une escalade sans justification est refusé. Le journal s'exporte en CSV depuis la barre latérale.
+
+Stockage : table BigQuery `lcbft_features.decisions` (partitionnée par date, clusterisée par dossier) avec `JOURNAL=bigquery`, fichier `data/decisions/decisions.csv` sinon.
+
+## Déploiement sur Cloud Run
+
+```bash
+APP_CODE_ACCES=<code-de-la-demo> bash deploy/cloud_run.sh
+```
+
+Le script active les API, crée un compte de service limité aux droits nécessaires (Vertex AI, jobs et données BigQuery), construit l'image à partir du `Dockerfile` et déploie le service en `europe-west1`. Les données synthétiques et les scores sont générés pendant la construction de l'image. Le journal des décisions est écrit dans BigQuery, et la note IA appelle Gemini sur Vertex AI.
+
+La démo est protégée par un code d'accès (`APP_CODE_ACCES`), une seule instance au maximum et zéro instance au repos : pas de coût quand personne ne l'utilise, et pas d'appels à Gemini par des visiteurs non invités.
 
 ## Hors périmètre
 

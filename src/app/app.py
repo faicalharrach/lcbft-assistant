@@ -10,6 +10,7 @@ Trois pages :
 - Performance    : évaluation contre la vérité terrain (mode démo).
 """
 
+import hmac
 import os
 import re
 import sys
@@ -27,7 +28,7 @@ from src.app.donnees import (  # noqa: E402
     libelle_variable, transactions_client,
 )
 from src.agent.graphe import MODELE_PAR_DEFAUT, generer_note  # noqa: E402
-from src.app import theme  # noqa: E402
+from src.app import journal, theme  # noqa: E402
 from src.app.geo import NOMS_RISQUE, carte_alertes, carte_client  # noqa: E402
 from src.detection.evaluate import SCORES  # noqa: E402
 
@@ -49,12 +50,8 @@ DECISIONS = ["À traiter", "En cours d'analyse", "Classé sans suite", "Escalad�
 
 st.markdown(theme.CSS, unsafe_allow_html=True)
 
-if "decisions" not in st.session_state:
-    st.session_state.decisions = {}
-
-
 def statut(dossier: str) -> str:
-    return st.session_state.decisions.get(dossier, {}).get("decision", DECISIONS[0])
+    return journal.statuts().get(dossier, DECISIONS[0])
 
 
 CLASSES_STATUT = {
@@ -105,7 +102,7 @@ def page_alertes():
     if statuts:
         vue = vue[vue["statut"].isin(statuts)]
 
-    traites = sum(d["decision"] in DECISIONS[2:] for d in st.session_state.decisions.values())
+    traites = sum(d in DECISIONS[2:] for d in journal.statuts().values())
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Clients surveillés", f"{len(scores):,}".replace(",", " "))
     c2.metric("Alertes affichées", len(vue))
@@ -281,15 +278,59 @@ def page_fiche():
     section_note(dossier, client, tx)
 
     st.markdown("#### Décision de l'analyste")
-    actuelle = st.session_state.decisions.get(dossier, {})
-    with st.form(f"decision_{dossier}"):
-        decision = st.radio("Décision", DECISIONS, index=DECISIONS.index(actuelle.get("decision", DECISIONS[0])),
-                            horizontal=True)
-        commentaire = st.text_area("Justification", actuelle.get("commentaire", ""),
-                                   placeholder="Ex. : justificatif de succession reçu, flux cohérent avec la vente.")
-        if st.form_submit_button("Enregistrer"):
-            st.session_state.decisions[dossier] = {"decision": decision, "commentaire": commentaire}
-            st.success("Décision enregistrée.")
+    with st.form(f"decision_{dossier}", clear_on_submit=True):
+        decision = st.radio("Décision", DECISIONS, index=DECISIONS.index(statut(dossier)), horizontal=True)
+        justification = st.text_area("Justification",
+                                     placeholder="Ex. : justificatif de succession reçu, flux cohérent avec la vente.")
+        if st.form_submit_button("Enregistrer la décision", type="primary", icon=":material/save:"):
+            if decision in DECISIONS[2:] and len(justification.strip()) < 10:
+                st.error("Un classement ou une escalade doit être motivé : ajoutez une justification.")
+            else:
+                journal.enregistrer(dossier, decision, justification, st.session_state.get("analyste", ""),
+                                    client["score_final"], dossier in st.session_state.get("notes", {}))
+                st.success("Décision enregistrée dans le journal.")
+                st.rerun()
+
+    historique = journal.historique(dossier)
+    st.markdown("#### Historique du dossier")
+    if historique.empty:
+        st.caption("Aucune décision enregistrée pour ce dossier.")
+    else:
+        st.dataframe(
+            historique.assign(horodatage=historique["horodatage"].dt.tz_convert("Europe/Paris").dt.tz_localize(None))[
+                ["horodatage", "decision", "justification", "analyste", "score_final", "note_generee"]
+            ].rename(columns={"horodatage": "Date", "decision": "Décision", "justification": "Justification",
+                              "analyste": "Analyste", "score_final": "Score", "note_generee": "Note IA"}),
+            hide_index=True, width="stretch",
+            column_config={"Date": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm"),
+                           "Score": st.column_config.NumberColumn(format="%.0f")},
+        )
+
+
+def note_pour_affichage(note: str, documents: list) -> str:
+    """Mise en forme de lecture : les identifiants de sources [reg_...] deviennent des renvois
+    numérotés, et la section Références une liste numérotée (titre et texte de référence).
+    La note brute, avec ses identifiants, reste celle qui est contrôlée et journalisée."""
+    par_id = {d.id: d for d in documents}
+    corps = re.split(r"^##\s+Références\s*$", note, maxsplit=1, flags=re.MULTILINE)[0]
+    ordre = []
+    for ident in re.findall(r"\[([a-z_]+)\]", corps):
+        if ident in par_id and ident not in ordre:
+            ordre.append(ident)
+
+    def renvoi(m):
+        ident = m.group(1)
+        if ident not in ordre:
+            return m.group(0)
+        n = ordre.index(ident) + 1
+        return f'<sup title="{par_id[ident].titre}" style="color:{theme.ACCENT}; font-weight:600;">{n}</sup>'
+
+    corps = re.sub(r"\s?\[([a-z_]+)\]", renvoi, corps)
+    references = "\n".join(f"{i}. **{par_id[ident].titre}** — {par_id[ident].source}"
+                            for i, ident in enumerate(ordre, start=1))
+    texte = corps.rstrip() + ("\n\n## Références\n" + references if references else "")
+    # Titres de la note un cran plus petits que ceux de la page.
+    return re.sub(r"^##\s+", "##### ", texte, flags=re.MULTILINE)
 
 
 def section_note(dossier: str, client: pd.Series, tx: pd.DataFrame) -> None:
@@ -325,8 +366,7 @@ def section_note(dossier: str, client: pd.Series, tx: pd.DataFrame) -> None:
         return
 
     with st.container(border=True):
-        # Titres de la note un cran plus petits que ceux de la page.
-        st.markdown(re.sub(r"^##\s+", "##### ", resultat["note"], flags=re.MULTILINE))
+        st.markdown(note_pour_affichage(resultat["note"], resultat["documents"]), unsafe_allow_html=True)
     if resultat["problemes"]:
         st.warning("Points à vérifier signalés par les contrôles automatiques :\n- "
                    + "\n- ".join(resultat["problemes"]))
@@ -413,10 +453,36 @@ PAGE_ALERTES = st.Page(page_alertes, title="File d'alertes", icon=":material/not
 PAGE_FICHE = st.Page(page_fiche, title="Fiche client", icon=":material/person_search:")
 PAGE_PERF = st.Page(page_performance, title="Performance", icon=":material/monitoring:")
 
-navigation = st.navigation({"Surveillance": [PAGE_ALERTES, PAGE_FICHE], "Pilotage": [PAGE_PERF]})
-with st.sidebar:
-    st.toggle("Mode démo", key="demo",
-              help="Affiche la vérité terrain des données synthétiques. Un analyste réel ne l'a pas.")
-    st.caption("Données 100 % synthétiques")
-    st.divider()
-navigation.run()
+
+def controle_acces() -> bool:
+    """Code d'accès optionnel (variable APP_CODE_ACCES) : protège une démo publique,
+    et donc les appels à Gemini, des visiteurs non invités."""
+    attendu = os.environ.get("APP_CODE_ACCES")
+    if not attendu or st.session_state.get("acces_ok"):
+        return True
+    entete("Accès", "Analyste LCB-FT", "Démonstration sur données 100 % synthétiques.")
+    with st.form("acces"):
+        code = st.text_input("Code d'accès", type="password")
+        if st.form_submit_button("Entrer", type="primary"):
+            if hmac.compare_digest(code, attendu):
+                st.session_state.acces_ok = True
+                st.rerun()
+            st.error("Code incorrect.")
+    return False
+
+
+acces_autorise = controle_acces()
+navigation = st.navigation({"Surveillance": [PAGE_ALERTES, PAGE_FICHE], "Pilotage": [PAGE_PERF]},
+                           position="sidebar" if acces_autorise else "hidden")
+if acces_autorise:
+    with st.sidebar:
+        st.text_input("Analyste", key="analyste", placeholder="Votre nom", help="Inscrit dans le journal des décisions.")
+        st.toggle("Mode démo", key="demo",
+                  help="Affiche la vérité terrain des données synthétiques. Un analyste réel ne l'a pas.")
+        export = journal.lire()
+        st.download_button("Exporter le journal des décisions", export.to_csv(index=False).encode("utf-8"),
+                           file_name="journal_decisions.csv", mime="text/csv", icon=":material/download:",
+                           disabled=export.empty, width="stretch")
+        st.caption("Données 100 % synthétiques")
+        st.divider()
+    navigation.run()
