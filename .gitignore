@@ -1,0 +1,17 @@
+# Environnement Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Données générées (recréées par python -m src.generate.run_all) et journaux de l'agent
+data/
+
+# Secrets et configuration locale
+.env
+*.json.key
+credentials*.json
+
+# Fichiers système et éditeur
+.DS_Store
+.vscode/
