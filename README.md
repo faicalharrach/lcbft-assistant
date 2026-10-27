@@ -4,6 +4,80 @@ Assistant de détection LCB-FT (lutte contre le blanchiment et le financement du
 
 Toutes les données du projet sont synthétiques. Aucune donnée réelle de client ou de banque n'est utilisée.
 
+![File d'alertes](docs/images/01_file_alertes.png)
+
+## Vue d'ensemble
+
+```mermaid
+flowchart TB
+    subgraph D["1 · Données synthétiques"]
+        direction LR
+        G["Générateurs Python<br/>clients · transactions · référentiels MCC et pays"] --> T["5 typologies injectées<br/>cas forts et discrets + 124 faux amis"]
+    end
+
+    subgraph B["2 · BigQuery"]
+        direction LR
+        R[("lcbft_raw<br/>818 k transactions")] --> F["features_clients<br/>SQL BigQuery, testé sur DuckDB"]
+        L[("lcbft_labels<br/>vérité terrain")]
+    end
+
+    subgraph M["3 · Détection hybride"]
+        direction LR
+        IF["Isolation Forest · 50 %"] --> S["Score de risque 0-100<br/>+ raisons SHAP"]
+        RG["8 règles métier · 50 %"] --> S
+    end
+
+    EV["4 · Évaluation contre la vérité terrain<br/>78 % des suspects retrouvés dans le top 300"]
+
+    subgraph A["5 · Agent IA · LangGraph"]
+        direction LR
+        C1["Collecter<br/>faits chiffrés"] --> C2["Qualifier<br/>typologies"] --> C3["Rechercher<br/>RAG · 14 fiches"] --> C4["Rédiger<br/>Gemini · Vertex AI"] --> C5{"Contrôler<br/>sources · montants<br/>articles · confidentialité"}
+        C5 -. "échec : réécriture" .-> C4
+    end
+
+    subgraph U["6 · Application Streamlit · Cloud Run"]
+        direction LR
+        UI["File d'alertes · fiche client<br/>carte des flux · performance"] -- "décision motivée" --> J[("Journal BigQuery<br/>décisions et notes IA")]
+    end
+
+    T --> R
+    T --> L
+    F --> IF
+    F --> RG
+    S --> EV
+    L --> EV
+    S --> UI
+    UI -- "générer la note" --> C1
+    C5 -- "note validée" --> UI
+
+    classDef donnees fill:#1F3A5F,stroke:#4C8DFF,color:#FFFFFF
+    classDef modele fill:#3B2A4F,stroke:#A07CFF,color:#FFFFFF
+    classDef ia fill:#4A2330,stroke:#F2545B,color:#FFFFFF
+    classDef app fill:#1E3A2F,stroke:#3CCB7F,color:#FFFFFF
+    class G,T,R,F,L donnees
+    class IF,RG,S,EV modele
+    class C1,C2,C3,C4,C5 ia
+    class UI,J app
+    style D fill:none,stroke:#4C8DFF,stroke-width:1px
+    style B fill:none,stroke:#4C8DFF,stroke-width:1px
+    style M fill:none,stroke:#A07CFF,stroke-width:1px
+    style A fill:none,stroke:#F2545B,stroke-width:1px
+    style U fill:none,stroke:#3CCB7F,stroke-width:1px
+```
+
+## Aperçu de l'application
+
+| | |
+|---|---|
+| ![Fiche client](docs/images/02_fiche_client.png) | ![Carte des flux](docs/images/03_carte_flux.png) |
+| **Fiche client** : score, règles déclenchées, explications SHAP et flux mensuels comparés au revenu déclaré. | **Carte des flux** : pays où le client opère, colorés selon leur niveau de risque. |
+| ![Note d'analyse](docs/images/04_note_ia.png) | ![Décision et historique](docs/images/05_decision_historique.png) |
+| **Note d'analyse** rédigée par Gemini, avec renvois numérotés vers les textes de référence. Ici, une note réelle archivée, validée par les contrôles du premier coup. | **Décision de l'analyste** : chaque décision motivée est ajoutée au journal BigQuery, jamais écrasée. |
+
+![Performance de la détection](docs/images/06_performance.png)
+
+*Page Performance (mode démo) : rappel et précision des trois méthodes selon le nombre de dossiers examinés, rappel par typologie et origine des fausses alertes.*
+
 ## Le problème
 
 Dans une banque de détail, les dispositifs LCB-FT reposent souvent sur des règles fixes et des seuils statiques. Ils produisent beaucoup d'alertes, dont une grande partie de faux positifs, et l'analyste passe plus de 30 minutes sur chaque dossier pour comprendre pourquoi un client a été remonté.
@@ -74,6 +148,7 @@ lcbft-assistant/
 │   ├── agent/         RAG et LangGraph
 │   └── app/           interface Streamlit
 ├── deploy/            script de déploiement Cloud Run
+├── docs/images/       captures de l'application
 ├── notebooks/
 └── tests/
 ```
