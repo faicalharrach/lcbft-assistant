@@ -27,6 +27,12 @@ def _date(v: dict) -> str:
 
 def aplatir(entree: dict) -> dict:
     """Une entrée du registre -> une ligne plate, prête pour BigQuery."""
+    identifiants = (
+        [f"PASSEPORT {v['NumeroPasseport'].strip()}"
+         for v in _valeurs(entree, "PASSEPORT") if v.get("NumeroPasseport", "").strip()]
+        + [f"{v.get('Commentaire') or 'AUTRE'} {v['NumeroCarte'].strip()}"
+           for v in _valeurs(entree, "AUTRE_IDENTITE") if v.get("NumeroCarte", "").strip()]
+    )
     return {
         "id_registre": entree["IdRegistre"],
         "nature": entree.get("Nature"),
@@ -34,13 +40,17 @@ def aplatir(entree: dict) -> dict:
         "prenoms": [v["Prenom"] for v in _valeurs(entree, "PRENOM") if v.get("Prenom")],
         "alias": [v["Alias"] for v in _valeurs(entree, "ALIAS") if v.get("Alias")],
         "dates_naissance": [_date(v) for v in _valeurs(entree, "DATE_DE_NAISSANCE")],
+        "lieux_naissance": [", ".join(filter(None, [v.get("Lieu"), v.get("Pays")]))
+                            for v in _valeurs(entree, "LIEU_DE_NAISSANCE")],
+        "nationalites": [v["Pays"] for v in _valeurs(entree, "NATIONALITE") if v.get("Pays")],
         "sexe": next((v.get("Sexe") for v in _valeurs(entree, "SEXE")), None),
+        "identifiants": identifiants,
+        "numero_omi": next((v.get("NumeroOMI") for v in _valeurs(entree, "NUMERO_OMI")), None),
         "fondements": [v.get("FondementJuridiqueLabel") for v in _valeurs(entree, "FONDEMENT_JURIDIQUE")],
         "motifs": " ".join(v.get("Motifs", "") for v in _valeurs(entree, "MOTIFS")).strip() or None,
         # tout le détail d'origine, pour l'audit : rien n'est perdu à la mise à plat
         "details_json": json.dumps(entree.get("RegistreDetail", []), ensure_ascii=False),
     }
-
 
 def noms_a_cribler(ligne: dict) -> list[dict]:
     """Tous les noms sous lesquels une personne peut apparaître : nom principal et alias."""
