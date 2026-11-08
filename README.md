@@ -240,6 +240,63 @@ La démo est protégée par un code d'accès (`APP_CODE_ACCES`), une seule insta
 
 Pas de données réelles, pas de déclaration TRACFIN réelle. Le projet est une démonstration. Il ne remplace ni le jugement de l'analyste ni un dispositif validé par la conformité.
 
+## Criblage des noms contre le registre des gels
+
+Extension du projet : vérifier qu'un nom ne figure pas sur le **registre national des gels des avoirs**
+publié par la DG Trésor (obligation de criblage, articles L. 562-1 et suivants du Code monétaire et financier).
+
+```mermaid
+flowchart LR
+    subgraph Nuit["La nuit · automatique"]
+        S[Cloud Scheduler<br/>chaque nuit à 3 h] -->|POST + jeton| F[Cloud Function<br/>maj-gels]
+        F -->|1. télécharge| D[(data.gouv.fr<br/>registre des gels)]
+        F -->|2. met à plat<br/>3. charge| B[(BigQuery<br/>lcbft_gels)]
+    end
+    subgraph Jour["Le jour · à la demande"]
+        C[Analyste ou<br/>système bancaire] -->|GET /criblage + jeton| A[API Cloud Run<br/>FastAPI]
+        A -->|JSON : alerte, score, fiche| C
+    end
+    B -.->|lu au démarrage| A
+```
+
+### Composants
+
+| Composant | Rôle | Code |
+|---|---|---|
+| Cloud Function `maj-gels` | Télécharge le registre, le met à plat (8 226 fiches, 20 411 noms et alias), le charge dans BigQuery | `functions/maj_gels/` |
+| Cloud Scheduler `maj-gels-nuit` | Déclenche la fonction chaque nuit à 3 h, avec authentification | `deploy/maj_gels.sh` |
+| API `lcbft-api` (Cloud Run) | Routes `/sante` et `/criblage`, accès authentifié uniquement | `api/` |
+
+### Correspondance des noms
+
+Le score compare les noms **mot à mot** : chaque mot cherché est rapproché du mot le plus ressemblant
+du nom inscrit, puis on fait la moyenne. Accents, casse, ponctuation et ordre des mots sont ignorés.
+
+| Nom cherché | Score | Alerte (seuil 85) |
+|---|---|---|
+| Grigory Shilkin | 100 | Oui : le patronyme en plus ne pénalise pas |
+| Gregory Shilkine | 89,5 | Oui : autre translittération |
+| Grigory Petrov | 70 | Non : un prénom commun ne suffit pas |
+
+### Utilisation
+
+```bash
+URL=$(gcloud run services describe lcbft-api --region=europe-west1 --format='value(status.url)')
+curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$URL/criblage?nom=Gregory%20Shilkine"
+```
+
+Documentation interactive de l'API (en local) : `uvicorn api.main:app --reload`, puis `http://localhost:8000/docs`.
+
+### Limites connues
+
+- **Fraîcheur des données** : l'API charge le registre à son démarrage. Une instance restée allumée
+  ne voit pas une mise à jour de la nuit. Correction prévue : rechargement automatique toutes les heures.
+- Le criblage porte sur les noms ; la confirmation d'une alerte (date de naissance, nationalité,
+  identifiants) reste une décision de l'analyste.
+
+Source des données : [Registre national des gels](https://www.data.gouv.fr/fr/datasets/registre-national-des-gels),
+DG Trésor, Licence Ouverte 2.0.
+
 ## Origine
 
 Le projet reprend une approche que j'ai mise en place en mission dans une banque de détail : Isolation Forest et règles métier co-construites avec les analystes, explicabilité SHAP et tableau de bord de traitement des alertes.
