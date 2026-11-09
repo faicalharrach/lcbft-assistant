@@ -289,8 +289,10 @@ Documentation interactive de l'API (en local) : `uvicorn api.main:app --reload`,
 
 ### Limites connues
 
-- **Fraîcheur des données** : l'API charge le registre à son démarrage. Une instance restée allumée
-  ne voit pas une mise à jour de la nuit. Correction prévue : rechargement automatique toutes les heures.
+- **Fraîcheur des données** : l'API relit BigQuery quand sa copie a plus d'une heure
+  (réglable avec `RECHARGEMENT_SECONDES`) ; `/sante` affiche l'âge de la copie. Le registre
+  lui-même n'est rechargé qu'une fois par nuit : une sanction publiée dans la journée est
+  visible le lendemain matin.
 - Le criblage porte sur les noms ; la confirmation d'une alerte (date de naissance, nationalité,
   identifiants) reste une décision de l'analyste.
 
